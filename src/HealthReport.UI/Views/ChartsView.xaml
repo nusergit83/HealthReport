@@ -1,0 +1,76 @@
+<UserControl x:Class="HealthReport.UI.Views.ChartsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:oxy="http://oxyplot.org/wpf">
+
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        <Style x:Key="ChartCard" TargetType="Border">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="BorderBrush" Value="#DDE1E6"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="8"/>
+            <Setter Property="Margin" Value="4"/>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid Margin="4">
+        <!-- Mensaje cuando no hay datos todavía -->
+        <TextBlock Text="{Binding Charts.NoDataMessage}"
+                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                   FontSize="14" Foreground="#AAA" FontStyle="Italic"
+                   Visibility="{Binding Charts.HasData,
+                       Converter={StaticResource BoolToVis},
+                       ConverterParameter=inverse}">
+            <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                    <Setter Property="Visibility" Value="Visible"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding Charts.HasData}" Value="True">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBlock.Style>
+        </TextBlock>
+
+        <!-- Grid 2×2 con los gráficos -->
+        <Grid>
+            <Grid.Style>
+                <Style TargetType="Grid">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding Charts.HasData}" Value="True">
+                            <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Grid.Style>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Row="0" Grid.Column="0" Style="{StaticResource ChartCard}">
+                <oxy:PlotView Model="{Binding Charts.StepsPlot}" Background="Transparent"/>
+            </Border>
+
+            <Border Grid.Row="0" Grid.Column="1" Style="{StaticResource ChartCard}">
+                <oxy:PlotView Model="{Binding Charts.HeartRatePlot}" Background="Transparent"/>
+            </Border>
+
+            <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource ChartCard}">
+                <oxy:PlotView Model="{Binding Charts.HvRplot}" Background="Transparent"/>
+            </Border>
+
+            <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource ChartCard}">
+                <oxy:PlotView Model="{Binding Charts.WeightPlot}" Background="Transparent"/>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

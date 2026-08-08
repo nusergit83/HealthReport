@@ -1,0 +1,19 @@
+## .NET / Visual Studio / VS Code
+bin/
+obj/
+.vs/
+.vscode/
+*.user
+*.suo
+*.cache
+*.dbmdl
+*.jfm
+*.pdb
+*.log
+TestResults/
+packages/
+coverage/
+
+## OS
+.DS_Store
+Thumbs.db
