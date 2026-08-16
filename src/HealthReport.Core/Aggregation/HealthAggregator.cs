@@ -7,6 +7,8 @@ namespace HealthReport.Core.Aggregation;
 /// </summary>
 public sealed class HealthAggregator : IHealthAggregator
 {
+    private const string SleepMetricType = "HKCategoryTypeIdentifierSleepAnalysis";
+
     // Métricas que se incluyen en el análisis, en orden de prioridad.
     private static readonly string[] RelevantMetrics =
     [
@@ -27,6 +29,24 @@ public sealed class HealthAggregator : IHealthAggregator
         "HKQuantityTypeIdentifierWalkingStepLength",
         "HKQuantityTypeIdentifierWalkingAsymmetryPercentage",
         "HKQuantityTypeIdentifierWalkingSteadiness"
+    ];
+
+    private static readonly HashSet<string> CumulativeMetrics =
+    [
+        "HKQuantityTypeIdentifierStepCount",
+        "HKQuantityTypeIdentifierActiveEnergyBurned",
+        "HKQuantityTypeIdentifierBasalEnergyBurned",
+        "HKQuantityTypeIdentifierDistanceWalkingRunning"
+    ];
+
+    private static readonly HashSet<string> AsleepValues =
+    [
+        "1",
+        "HKCategoryValueSleepAnalysisAsleep",
+        "HKCategoryValueSleepAnalysisAsleepCore",
+        "HKCategoryValueSleepAnalysisAsleepDeep",
+        "HKCategoryValueSleepAnalysisAsleepREM",
+        "HKCategoryValueSleepAnalysisAsleepUnspecified"
     ];
 
     public HealthSummary Aggregate(
@@ -72,18 +92,21 @@ public sealed class HealthAggregator : IHealthAggregator
 
         if (subset.Count == 0) return null;
 
-        var values = subset.Select(r => r.Value).ToList();
+        var dailyPoints = BuildDailyPoints(metricType, subset);
+        if (dailyPoints.Count == 0) return null;
+
+        var values = dailyPoints.Select(p => p.Value).ToList();
         var trend = ComputeTrend(values);
 
         return new MetricSummary
         {
             MetricType = metricType,
-            Unit = subset[^1].Unit,
+            Unit = ResolveUnit(metricType, subset),
             Average = Math.Round(values.Average(), 2),
             Min = values.Min(),
             Max = values.Max(),
             Latest = values[^1],
-            SampleCount = values.Count,
+            SampleCount = dailyPoints.Count,
             Trend = Math.Round(trend, 4)
         };
     }
@@ -131,30 +154,22 @@ public sealed class HealthAggregator : IHealthAggregator
     {
         var cutoff = DateTime.Now.AddDays(-days).Date;
         var result = new List<MetricTimeSeries>();
+        var selectedMetricTypes = metricTypes.ToHashSet();
 
-        // Agrupar todos los registros relevantes por tipo y fecha (media diaria)
         var grouped = records
             .Where(r => r.StartDate >= cutoff)
             .GroupBy(r => r.Type);
 
         foreach (var typeGroup in grouped)
         {
-            if (!metricTypes.Contains(typeGroup.Key)) continue;
+            if (!selectedMetricTypes.Contains(typeGroup.Key)) continue;
 
-            var dailyPoints = typeGroup
-                .GroupBy(r => DateOnly.FromDateTime(r.StartDate))
-                .OrderBy(g => g.Key)
-                .Select(g => new DailyDataPoint
-                {
-                    Date = g.Key,
-                    Value = Math.Round(g.Average(r => r.Value), 2)
-                })
-                .ToList();
+            var dailyPoints = BuildDailyPoints(typeGroup.Key, typeGroup.OrderBy(r => r.StartDate));
 
             if (dailyPoints.Count == 0) continue;
 
             MetricDisplayNames.TryGetValue(typeGroup.Key, out var displayName);
-            var unit = typeGroup.First().Unit;
+            var unit = ResolveUnit(typeGroup.Key, typeGroup);
 
             result.Add(new MetricTimeSeries
             {
@@ -167,4 +182,81 @@ public sealed class HealthAggregator : IHealthAggregator
 
         return result;
     }
+
+    private static List<DailyDataPoint> BuildDailyPoints(string metricType, IEnumerable<HealthRecord> records) =>
+        metricType switch
+        {
+            SleepMetricType => BuildSleepDailyPoints(records),
+            _ when CumulativeMetrics.Contains(metricType) => records
+                .GroupBy(r => DateOnly.FromDateTime(r.StartDate))
+                .OrderBy(g => g.Key)
+                .Select(g => new DailyDataPoint
+                {
+                    Date = g.Key,
+                    Value = Math.Round(g.Sum(r => r.Value), 2)
+                })
+                .ToList(),
+            _ => records
+                .GroupBy(r => DateOnly.FromDateTime(r.StartDate))
+                .OrderBy(g => g.Key)
+                .Select(g => new DailyDataPoint
+                {
+                    Date = g.Key,
+                    Value = Math.Round(g.Average(r => r.Value), 2)
+                })
+                .ToList()
+        };
+
+    private static List<DailyDataPoint> BuildSleepDailyPoints(IEnumerable<HealthRecord> records)
+    {
+        var totalsByDay = new Dictionary<DateOnly, double>();
+
+        foreach (var record in records.Where(IsAsleepRecord))
+        {
+            if (record.EndDate <= record.StartDate)
+                continue;
+
+            foreach (var (date, hours) in SplitDurationByDay(record.StartDate, record.EndDate))
+            {
+                totalsByDay[date] = totalsByDay.TryGetValue(date, out var total)
+                    ? total + hours
+                    : hours;
+            }
+        }
+
+        return totalsByDay
+            .OrderBy(kvp => kvp.Key)
+            .Select(kvp => new DailyDataPoint
+            {
+                Date = kvp.Key,
+                Value = Math.Round(kvp.Value, 2)
+            })
+            .ToList();
+    }
+
+    private static IEnumerable<(DateOnly Date, double Hours)> SplitDurationByDay(DateTime start, DateTime end)
+    {
+        var current = start;
+
+        while (current < end)
+        {
+            var nextBoundary = current.Date.AddDays(1);
+            var segmentEnd = nextBoundary < end ? nextBoundary : end;
+            yield return (DateOnly.FromDateTime(current), (segmentEnd - current).TotalHours);
+            current = segmentEnd;
+        }
+    }
+
+    private static bool IsAsleepRecord(HealthRecord record)
+    {
+        if (!string.Equals(record.Type, SleepMetricType, StringComparison.Ordinal))
+            return false;
+
+        return AsleepValues.Contains(record.RawValue);
+    }
+
+    private static string ResolveUnit(string metricType, IEnumerable<HealthRecord> records) =>
+        metricType == SleepMetricType
+            ? "h"
+            : records.LastOrDefault()?.Unit ?? string.Empty;
 }

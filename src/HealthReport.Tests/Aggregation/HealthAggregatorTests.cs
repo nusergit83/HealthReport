@@ -47,6 +47,51 @@ public sealed class HealthAggregatorTests
         hr.SampleCount.Should().Be(4);
     }
 
+    [Fact]
+    public void Aggregate_CumulativeMetrics_UseDailyTotals()
+    {
+        var day1 = DateTime.Today.AddDays(-2).AddHours(8);
+        var day2 = DateTime.Today.AddDays(-1).AddHours(8);
+        var records = new List<HealthRecord>
+        {
+            MakeRecord("HKQuantityTypeIdentifierStepCount", 2000, day1),
+            MakeRecord("HKQuantityTypeIdentifierStepCount", 3000, day1.AddHours(2)),
+            MakeRecord("HKQuantityTypeIdentifierStepCount", 7000, day2)
+        };
+
+        var summary = _aggregator.Aggregate(DefaultProfile, records, []);
+        var steps = GetMetric(summary, "StepCount");
+
+        steps.Should().NotBeNull();
+        steps!.Average.Should().Be(6000);
+        steps.Min.Should().Be(5000);
+        steps.Max.Should().Be(7000);
+        steps.Latest.Should().Be(7000);
+        steps.SampleCount.Should().Be(2);
+    }
+
+    [Fact]
+    public void Aggregate_SleepMetric_UsesDailyAsleepHours()
+    {
+        var sleepStart = DateTime.Today.AddDays(-2).AddHours(23);
+        var sleepEnd = sleepStart.AddHours(8);
+        var records = new List<HealthRecord>
+        {
+            MakeSleepRecord("HKCategoryValueSleepAnalysisAsleepCore", sleepStart, sleepEnd),
+            MakeSleepRecord("HKCategoryValueSleepAnalysisInBed", DateTime.Today.AddDays(-1).AddHours(22), DateTime.Today.AddDays(-1).AddHours(22.5))
+        };
+
+        var summary = _aggregator.Aggregate(DefaultProfile, records, []);
+        var sleep = GetMetric(summary, "SleepAnalysis");
+
+        sleep.Should().NotBeNull();
+        sleep!.Unit.Should().Be("h");
+        sleep.Average.Should().Be(4);
+        sleep.Min.Should().Be(1);
+        sleep.Max.Should().Be(7);
+        sleep.SampleCount.Should().Be(2);
+    }
+
     // ── Tendencia ─────────────────────────────────────────────────────
 
     [Fact]
@@ -140,10 +185,37 @@ public sealed class HealthAggregatorTests
         summary.RecentWorkouts.Should().HaveCount(20);
     }
 
+    [Fact]
+    public void GetTimeSeries_CumulativeMetric_UsesDailySums()
+    {
+        var day = DateTime.Today.AddDays(-2).AddHours(8);
+        var records = new List<HealthRecord>
+        {
+            MakeRecord("HKQuantityTypeIdentifierStepCount", 1200, day),
+            MakeRecord("HKQuantityTypeIdentifierStepCount", 800, day.AddHours(1)),
+            MakeRecord("HKQuantityTypeIdentifierStepCount", 3500, day.AddDays(1))
+        };
+
+        var series = _aggregator.GetTimeSeries(records, ["HKQuantityTypeIdentifierStepCount"], days: 10);
+
+        series.Should().HaveCount(1);
+        series[0].Points.Select(p => p.Value).Should().Equal([2000, 3500]);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────
 
     private static HealthRecord MakeRecord(string type, double value, DateTime date) =>
-        new() { Type = type, Value = value, StartDate = date, EndDate = date, Unit = "count" };
+        new() { Type = type, RawValue = value.ToString(System.Globalization.CultureInfo.InvariantCulture), Value = value, StartDate = date, EndDate = date, Unit = "count" };
+
+    private static HealthRecord MakeSleepRecord(string rawValue, DateTime startDate, DateTime endDate) =>
+        new()
+        {
+            Type = "HKCategoryTypeIdentifierSleepAnalysis",
+            RawValue = rawValue,
+            StartDate = startDate,
+            EndDate = endDate,
+            Unit = string.Empty
+        };
 
     private static List<HealthRecord> MakeRecords(string type, double[] values, DateTime baseDate) =>
         values.Select((v, i) => MakeRecord(type, v, baseDate.AddDays(i))).ToList();

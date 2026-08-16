@@ -14,7 +14,8 @@ public interface IHealthAggregator
         int days = 90);
 
     /// <summary>
-    /// Devuelve la serie temporal diaria de las métricas indicadas (media por día).
+    /// Devuelve la serie temporal diaria de las métricas indicadas
+    /// usando suma o media según el tipo de métrica.
     /// </summary>
     IReadOnlyList<MetricTimeSeries> GetTimeSeries(
         IEnumerable<HealthRecord> records,

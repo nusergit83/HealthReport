@@ -19,10 +19,21 @@ public sealed class AppleHealthXmlParserTests
         var xml = """
                   <?xml version="1.0" encoding="UTF-8"?>
                   <HealthData locale="es_ES">
-                    <Me DateOfBirth="1990-06-15"
+                    <Me HKCharacteristicTypeIdentifierDateOfBirth="1990-06-15"
                         HKCharacteristicTypeIdentifierBiologicalSex="HKBiologicalSexMale"
-                        HeightInMeters="1.80"
-                        WeightInKilograms="80.5"/>
+                        HKCharacteristicTypeIdentifierBloodType="HKBloodTypeNotSet"/>
+                    <Record type="HKQuantityTypeIdentifierHeight"
+                            sourceName="Health"
+                            unit="m"
+                            value="1.80"
+                            startDate="2026-07-01 09:00:00 +0200"
+                            endDate="2026-07-01 09:00:00 +0200"/>
+                    <Record type="HKQuantityTypeIdentifierBodyMass"
+                            sourceName="Health"
+                            unit="kg"
+                            value="80.5"
+                            startDate="2026-07-02 09:00:00 +0200"
+                            endDate="2026-07-02 09:00:00 +0200"/>
                   </HealthData>
                   """;
 
@@ -33,7 +44,7 @@ public sealed class AppleHealthXmlParserTests
         profile.HeightMeters.Should().BeApproximately(1.80, 0.001);
         profile.WeightKg.Should().BeApproximately(80.5, 0.001);
         profile.Bmi.Should().BeApproximately(24.8, 0.2);
-        records.Should().BeEmpty();
+        records.Should().HaveCount(2);
         workouts.Should().BeEmpty();
     }
 
@@ -98,7 +109,31 @@ public sealed class AppleHealthXmlParserTests
     }
 
     [Fact]
-    public async Task ParseAsync_RecordWithNonNumericValue_IsDiscarded()
+    public async Task ParseAsync_UsesLatestHeightAndWeightRecords()
+    {
+        var xml = """
+                  <?xml version="1.0" encoding="UTF-8"?>
+                  <HealthData locale="es_ES">
+                    <Me HKCharacteristicTypeIdentifierDateOfBirth="1990-06-15"/>
+                    <Record type="HKQuantityTypeIdentifierHeight" value="1.75"
+                            startDate="2026-06-01 08:00:00 +0200" endDate="2026-06-01 08:00:00 +0200" unit="m"/>
+                    <Record type="HKQuantityTypeIdentifierHeight" value="1.80"
+                            startDate="2026-07-01 08:00:00 +0200" endDate="2026-07-01 08:00:00 +0200" unit="m"/>
+                    <Record type="HKQuantityTypeIdentifierBodyMass" value="79.0"
+                            startDate="2026-06-15 08:00:00 +0200" endDate="2026-06-15 08:00:00 +0200" unit="kg"/>
+                    <Record type="HKQuantityTypeIdentifierBodyMass" value="80.5"
+                            startDate="2026-07-10 08:00:00 +0200" endDate="2026-07-10 08:00:00 +0200" unit="kg"/>
+                  </HealthData>
+                  """;
+
+        var (profile, _, _) = await _parser.ParseAsync(ToStream(xml));
+
+        profile.HeightMeters.Should().BeApproximately(1.80, 0.001);
+        profile.WeightKg.Should().BeApproximately(80.5, 0.001);
+    }
+
+    [Fact]
+    public async Task ParseAsync_SleepRecordWithCategoricalValue_IsPreserved()
     {
         var xml = """
                   <?xml version="1.0" encoding="UTF-8"?>
@@ -113,28 +148,10 @@ public sealed class AppleHealthXmlParserTests
 
         var (_, records, _) = await _parser.ParseAsync(ToStream(xml));
 
-        // Los valores no numéricos se descartan silenciosamente
-        records.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task ParseAsync_RecordWithNumericSleepValue_IsParsed()
-    {
-        var xml = """
-                  <?xml version="1.0" encoding="UTF-8"?>
-                  <HealthData locale="es_ES">
-                    <Me/>
-                    <Record type="HKCategoryTypeIdentifierSleepAnalysis"
-                            value="1"
-                            startDate="2026-07-01 23:00:00 +0200"
-                            endDate="2026-07-02 07:00:00 +0200"/>
-                  </HealthData>
-                  """;
-
-        var (_, records, _) = await _parser.ParseAsync(ToStream(xml));
-
         records.Should().HaveCount(1);
-        records[0].Value.Should().Be(1);
+        records[0].Type.Should().Be("HKCategoryTypeIdentifierSleepAnalysis");
+        records[0].RawValue.Should().Be("HKCategoryValueSleepAnalysisAsleep");
+        records[0].Value.Should().Be(0);
     }
 
     [Fact]

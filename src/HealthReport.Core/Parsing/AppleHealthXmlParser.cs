@@ -11,6 +11,10 @@ namespace HealthReport.Core.Parsing;
 public sealed class AppleHealthXmlParser : IHealthParser
 {
     private const int ProgressReportInterval = 5000;
+    private const string DateOfBirthAttribute = "HKCharacteristicTypeIdentifierDateOfBirth";
+    private const string HeightType = "HKQuantityTypeIdentifierHeight";
+    private const string WeightType = "HKQuantityTypeIdentifierBodyMass";
+    private const string SleepType = "HKCategoryTypeIdentifierSleepAnalysis";
 
     // Formatos de fecha que Apple Health usa según región y versión del export
     private static readonly string[] DateFormats =
@@ -75,13 +79,13 @@ public sealed class AppleHealthXmlParser : IHealthParser
         }
 
         progress?.Report(count);
-        return (profile, records, workouts);
+        return (EnrichProfile(profile, records), records, workouts);
     }
 
     private static UserProfile ParseProfile(XmlReader reader)
     {
         DateOnly? dob = null;
-        var dobStr = reader.GetAttribute("DateOfBirth");
+        var dobStr = reader.GetAttribute(DateOfBirthAttribute) ?? reader.GetAttribute("DateOfBirth");
         if (!string.IsNullOrEmpty(dobStr) && DateOnly.TryParse(dobStr, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
             dob = parsed;
 
@@ -108,8 +112,8 @@ public sealed class AppleHealthXmlParser : IHealthParser
         if (string.IsNullOrEmpty(type)) return null;
 
         var valueStr = reader.GetAttribute("value");
-        // Algunos records de categoría (ej. SleepAnalysis) tienen value numérico como enum
-        if (!TryParseDouble(valueStr, out var value))
+        var hasNumericValue = TryParseDouble(valueStr, out var value);
+        if (!hasNumericValue && type != SleepType)
             return null;
 
         var startDate = ParseDate(reader.GetAttribute("startDate"));
@@ -120,6 +124,7 @@ public sealed class AppleHealthXmlParser : IHealthParser
             Type = type,
             SourceName = reader.GetAttribute("sourceName") ?? string.Empty,
             Unit = reader.GetAttribute("unit") ?? string.Empty,
+            RawValue = valueStr ?? string.Empty,
             Value = value,
             StartDate = startDate,
             EndDate = ParseDate(reader.GetAttribute("endDate"))
@@ -171,6 +176,29 @@ public sealed class AppleHealthXmlParser : IHealthParser
         value = 0;
         if (string.IsNullOrEmpty(s)) return false;
         return double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out value);
+    }
+
+    private static UserProfile EnrichProfile(UserProfile profile, List<HealthRecord> records)
+    {
+        var latestHeight = records
+            .Where(r => r.Type == HeightType)
+            .OrderByDescending(r => r.StartDate)
+            .Select(r => (double?)r.Value)
+            .FirstOrDefault();
+
+        var latestWeight = records
+            .Where(r => r.Type == WeightType)
+            .OrderByDescending(r => r.StartDate)
+            .Select(r => (double?)r.Value)
+            .FirstOrDefault();
+
+        return new UserProfile
+        {
+            DateOfBirth = profile.DateOfBirth,
+            BiologicalSex = profile.BiologicalSex,
+            HeightMeters = latestHeight ?? profile.HeightMeters,
+            WeightKg = latestWeight ?? profile.WeightKg
+        };
     }
 
     private static string SanitizeSex(string? raw) => raw switch

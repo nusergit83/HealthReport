@@ -21,10 +21,10 @@ HealthReport/
 │   │   │   └── MetricTimeSeries.cs      ✅  (DailyDataPoint para gráficos)
 │   │   ├── Parsing/
 │   │   │   ├── IHealthParser.cs         ✅
-│   │   │   └── AppleHealthXmlParser.cs  ✅  (streaming, multiformato fecha, DTD ignore)
+│   │   │   └── AppleHealthXmlParser.cs  ✅  (streaming, multiformato fecha, DTD ignore, sueño categórico, perfil derivado)
 │   │   ├── Aggregation/
 │   │   │   ├── IHealthAggregator.cs     ✅
-│   │   │   └── HealthAggregator.cs      ✅  (estadísticas + tendencia lineal + GetTimeSeries)
+│   │   │   └── HealthAggregator.cs      ✅  (estadísticas diarias correctas + tendencia lineal + GetTimeSeries)
 │   │   └── Export/
 │   │       ├── IReportExporter.cs           ✅
 │   │       ├── MarkdownReportExporter.cs    ✅
@@ -97,19 +97,27 @@ ZIP upload
 La estrategia clave: **nunca enviar todos los datos a la vez**. Se envían resúmenes JSON estructurados de <30 KB por prompt.
 
 ### Fase 1 — Perfil demográfico y datos básicos
-- Datos: fecha de nacimiento, sexo, altura, peso (últimos 90 días), IMC calculado.
+- Datos: fecha de nacimiento y sexo desde `<Me>`; altura y peso desde los últimos registros de `HKQuantityTypeIdentifierHeight` y `HKQuantityTypeIdentifierBodyMass`; IMC calculado.
 - Objetivo: que el modelo establezca el contexto del usuario.
 - Salida esperada: párrafo de perfil + lista de valores de referencia.
 
 ### Fase 2 — Actividad física
-- Datos: media diaria de pasos, energía activa, distancia, minutos de ejercicio (últimos 90 días + tendencia).
+- Datos: totales diarios de pasos, energía activa y distancia; minutos de ejercicio (últimos 90 días + tendencia).
 - Objetivo: evaluar nivel de actividad, comparar con recomendaciones OMS.
 - Salida esperada: evaluación + recomendaciones concretas.
 
 ### Fase 3 — Salud cardiovascular y sueño
-- Datos: media y tendencia de FC en reposo, HRV, VO₂ máx, SpO₂, distribución de sueño (REM + profundo).
+- Datos: medias diarias para métricas puntuales (FC, HRV, VO₂ máx, SpO₂, etc.) y horas de sueño por día derivadas de `SleepAnalysis` con categorías `Asleep*`.
 - Objetivo: detectar patrones de riesgo o mejora.
 - Salida esperada: análisis cardiovascular + análisis de sueño.
+
+### Notas críticas del pipeline de datos
+- El atributo real de fecha de nacimiento en Apple Health es `HKCharacteristicTypeIdentifierDateOfBirth`; no debe asumirse `DateOfBirth` como única fuente.
+- Altura y peso no suelen venir en `<Me>`; el perfil se completa usando los registros más recientes de altura y peso del historial.
+- Las métricas acumulativas (`StepCount`, `ActiveEnergyBurned`, `BasalEnergyBurned`, `DistanceWalkingRunning`) se agregan por **suma diaria** antes de calcular media, min, max o tendencia.
+- Las métricas puntuales (por ejemplo FC, HRV, peso, SpO₂) se agregan por **media diaria**.
+- `SleepAnalysis` no es numérico en muchos exports; sus valores categóricos deben preservarse y transformarse en duración diaria de sueño, ignorando `InBed` para no inflar el descanso real.
+- `GetTimeSeries()` usa exactamente la misma lógica diaria que el agregador para que gráficos e informe sean coherentes.
 
 ### Fase 4 — Síntesis final
 - Datos: los 3 resúmenes de fases anteriores (texto ya generado por el modelo, compacto).
@@ -215,11 +223,11 @@ La app ajusta automáticamente el tamaño de los resúmenes JSON según la capac
 
 ```xml
 <HealthData locale="es_ES">
-  <Me DateOfBirth="1983-03-06" HKCharacteristicTypeIdentifierBiologicalSex="HKBiologicalSexMale"
+  <Me HKCharacteristicTypeIdentifierDateOfBirth="1983-03-06"
+      HKCharacteristicTypeIdentifierBiologicalSex="HKBiologicalSexMale"
       HKCharacteristicTypeIdentifierBloodType="HKBloodTypeNotSet"
       HKCharacteristicTypeIdentifierFitzpatrickSkinType="HKFitzpatrickSkinTypeNotSet"
-      HKCharacteristicTypeIdentifierCardioFitnessMedicationsUse="HKCategoryValueNotApplicable"
-      HeightInMeters="1.75" WeightInKilograms="74.5"/>
+      HKCharacteristicTypeIdentifierCardioFitnessMedicationsUse="HKCategoryValueNotApplicable"/>
 
   <!-- Registro tipo más común: Record -->
   <Record type="HKQuantityTypeIdentifierStepCount"
@@ -228,6 +236,27 @@ La app ajusta automáticamente el tamaño de los resúmenes JSON según la capac
           value="589"
           startDate="2026-08-07 10:23:11 +0200"
           endDate="2026-08-07 10:23:11 +0200"/>
+
+  <!-- Altura y peso suelen aparecer como records normales -->
+  <Record type="HKQuantityTypeIdentifierHeight"
+          sourceName="Health"
+          unit="m"
+          value="1.75"
+          startDate="2026-08-01 08:00:00 +0200"
+          endDate="2026-08-01 08:00:00 +0200"/>
+
+  <Record type="HKQuantityTypeIdentifierBodyMass"
+          sourceName="Health"
+          unit="kg"
+          value="74.5"
+          startDate="2026-08-01 08:05:00 +0200"
+          endDate="2026-08-01 08:05:00 +0200"/>
+
+  <!-- Sueño: valores categóricos, no numéricos -->
+  <Record type="HKCategoryTypeIdentifierSleepAnalysis"
+          value="HKCategoryValueSleepAnalysisAsleepCore"
+          startDate="2026-08-06 23:30:00 +0200"
+          endDate="2026-08-07 07:00:00 +0200"/>
 
   <!-- Workout -->
   <Workout workoutActivityType="HKWorkoutActivityTypeRunning"
@@ -260,3 +289,11 @@ La app ajusta automáticamente el tamaño de los resúmenes JSON según la capac
 | WalkingAsymmetryPercentage | Asimetría | % |
 | WalkingSteadiness | Estabilidad al caminar | % |
 | AppleSleepingBreathingDisturbances | Disturbios respiratorios | events/hour |
+
+### Reglas de agregación por tipo
+
+| Tipo de métrica | Ejemplos | Agregación diaria correcta |
+|---|---|---|
+| Acumulativa | StepCount, ActiveEnergyBurned, BasalEnergyBurned, DistanceWalkingRunning | Suma de muestras del día |
+| Puntual | HeartRate, RestingHeartRate, HRV, VO2Max, SpO₂, BodyMass | Media de muestras del día |
+| Categórica de duración | SleepAnalysis | Duración diaria en horas a partir de segmentos `Asleep*` |
